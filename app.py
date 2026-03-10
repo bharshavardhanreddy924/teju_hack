@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import json
 import io
+import requests as _requests
 
 st.set_page_config(page_title="QueryMind AI", page_icon="⚡", layout="wide")
 
@@ -16,15 +17,45 @@ st.set_page_config(page_title="QueryMind AI", page_icon="⚡", layout="wide")
 # the Streamlit Cloud "Secrets" dashboard (production). Never exposed to users.
 # ---------------------------------------------------------------------------
 def _load_gemini_keys() -> list[str]:
+    raw = None
     try:
+        # Format 1 (preferred): [gemini] section with api_keys key
         raw = st.secrets["gemini"]["api_keys"]
-        keys = list(raw) if not isinstance(raw, str) else [raw]
-        return [k.strip() for k in keys if k.strip()]
     except Exception:
+        pass
+    if raw is None:
+        try:
+            # Format 2 (flat): api_keys at top level — no [gemini] header
+            raw = st.secrets["api_keys"]
+        except Exception:
+            pass
+    if raw is None:
         return []
+    keys = list(raw) if not isinstance(raw, str) else [raw]
+    return [k.strip() for k in keys if k.strip()]
 
 GEMINI_API_KEYS: list[str] = _load_gemini_keys()
 MODEL_CHOICE: str = "gemini-2.5-flash"
+
+def _load_groq_keys() -> list[str]:
+    raw = None
+    try:
+        raw = st.secrets["groq"]["api_keys"]
+    except Exception:
+        pass
+    if raw is None:
+        try:
+            raw = st.secrets["groq_api_keys"]
+        except Exception:
+            pass
+    if raw is None:
+        return []
+    keys = list(raw) if not isinstance(raw, str) else [raw]
+    return [k.strip() for k in keys if k.strip()]
+
+GROQ_API_KEYS: list[str] = _load_groq_keys()
+GROQ_MODEL: str = "llama-3.3-70b-versatile"
+GROQ_API_URL: str = "https://api.groq.com/openai/v1/chat/completions"
 
 EMERALD = "#10b981"
 EMERALD_LIGHT = "#34d399"
@@ -252,26 +283,58 @@ with st.sidebar:
 
     if st.session_state.messages:
         st.divider()
-        if st.button("🗑 Clear Chat"):
+        if st.button("Clear Chat"):
             st.session_state.messages = []
             st.rerun()
 
 
-def call_gemini(prompt_text: str) -> str:
-    if not GEMINI_API_KEYS:
-        raise Exception("No Gemini API keys configured. Add keys to .streamlit/secrets.toml or the Streamlit Cloud Secrets dashboard.")
+def _call_groq(prompt_text: str) -> str:
+    """Internal: call Groq LLM. Never surfaced to the user directly."""
     last_err = None
-    for key in GEMINI_API_KEYS:
+    for key in GROQ_API_KEYS:
         try:
-            client = genai.Client(api_key=key)
-            return client.models.generate_content(model=MODEL_CHOICE, contents=prompt_text).text.strip()
+            resp = _requests.post(
+                GROQ_API_URL,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={
+                    "model": GROQ_MODEL,
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful data analysis assistant."},
+                        {"role": "user", "content": prompt_text},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 2048,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
         except Exception as e:
-            error_str = str(e)
-            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "quota" in error_str.lower():
-                last_err = e
-                continue
-            raise e
-    raise Exception(f"All API keys exhausted (rate limit). Wait ~60s and retry. Last error: {last_err}")
+            last_err = e
+            continue
+    raise Exception(f"Groq fallback also failed. Last error: {last_err}")
+
+
+def call_ai(prompt_text: str) -> str:
+    """Call Gemini; silently fall back to Groq if all Gemini keys fail."""
+    gemini_err = None
+    if GEMINI_API_KEYS:
+        for key in GEMINI_API_KEYS:
+            try:
+                client = genai.Client(api_key=key)
+                return client.models.generate_content(model=MODEL_CHOICE, contents=prompt_text).text.strip()
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "quota" in error_str.lower():
+                    gemini_err = e
+                    continue
+                gemini_err = e
+                break  # non-rate-limit Gemini error — try Groq next
+    if GROQ_API_KEYS:
+        return _call_groq(prompt_text)
+    if gemini_err:
+        raise gemini_err
+    raise Exception("No AI API keys configured. Contact the app administrator.")
 
 
 def clean_code_block(text: str, lang: str = "") -> str:
@@ -307,7 +370,7 @@ Rules:
 9. For summaries, aggregate key metrics.
 """
     try:
-        sql = call_gemini(prompt)
+        sql = call_ai(prompt)
         sql = clean_code_block(sql, "sql")
         if "Campaign_ID" in sql:
             sql = sql.replace("Campaign_ID", "Campaign_Type")
@@ -354,7 +417,7 @@ RULES:
 10. 4-space indentation.
 """
     try:
-        code = call_gemini(prompt)
+        code = call_ai(prompt)
         code = clean_code_block(code, "python")
         return sanitize_chart_code(code)
     except Exception as e:
@@ -372,7 +435,7 @@ Result (first rows):
 
 Write 2-3 concise sentences analyzing what this data reveals. Mention specific numbers. No markdown."""
     try:
-        return call_gemini(prompt)
+        return call_ai(prompt)
     except Exception:
         return None
 
@@ -383,7 +446,7 @@ def generate_smart_questions(schema_info):
 
 Generate exactly 4 smart analytical questions specific to these columns. Return ONLY a JSON array of 4 strings."""
     try:
-        raw = clean_code_block(call_gemini(prompt), "json")
+        raw = clean_code_block(call_ai(prompt), "json")
         questions = json.loads(raw)
         if isinstance(questions, list) and len(questions) >= 4:
             return questions[:4]
@@ -408,7 +471,7 @@ Categories: {cat_stats}
 
 Write a concise 3-4 sentence executive summary. Be specific with numbers. No markdown."""
     try:
-        return call_gemini(prompt)
+        return call_ai(prompt)
     except Exception:
         return None
 
@@ -429,12 +492,12 @@ if st.session_state.current_df is not None and st.session_state.data_profile:
             <div class="q-bar"><div class="q-fill" style="width:{qs}%;background:{qc};"></div></div></div>
     </div>""", unsafe_allow_html=True)
 
-    if GEMINI_API_KEYS:
+    if GEMINI_API_KEYS or GROQ_API_KEYS:
         if st.session_state.ai_summary is None:
             with st.spinner("Generating summary..."):
                 st.session_state.ai_summary = generate_ai_summary(st.session_state.schema_info, st.session_state.current_df)
         if st.session_state.ai_summary:
-            st.markdown(f"""<div class="note-card"><h4> Executive Summary</h4><p>{st.session_state.ai_summary}</p></div>""", unsafe_allow_html=True)
+            st.markdown(f"""<div class="note-card"><h4>Executive Summary</h4><p>{st.session_state.ai_summary}</p></div>""", unsafe_allow_html=True)
 
         if not st.session_state.smart_questions:
             with st.spinner("Generating suggestions..."):
@@ -468,13 +531,13 @@ if st.session_state.current_df is not None and not st.session_state.messages:
     else:
         qc1, qc2, qc3 = st.columns(3)
         with qc1:
-            if st.button("📈 Top Performers", use_container_width=True):
+            if st.button("Top Performers", use_container_width=True):
                 st.session_state.demo_prompt = "Show me the top 5 performers by the most important metric"
         with qc2:
-            if st.button("📊 Overview", use_container_width=True):
+            if st.button("Overview", use_container_width=True):
                 st.session_state.demo_prompt = "Give me a complete overview with key aggregated metrics"
         with qc3:
-            if st.button("🔍 Anomalies", use_container_width=True):
+            if st.button("Anomalies", use_container_width=True):
                 st.session_state.demo_prompt = "Find anomalies and outliers in the data"
 
 chat_prompt = st.chat_input(" Ask anything about your data...")
@@ -486,8 +549,8 @@ else:
     prompt = chat_prompt
 
 if prompt:
-    if not GEMINI_API_KEYS:
-        st.error("No Gemini API keys configured. Contact the app administrator.")
+    if not GEMINI_API_KEYS and not GROQ_API_KEYS:
+        st.error("No AI API keys configured. Contact the app administrator.")
         st.stop()
     if not st.session_state.schema_info:
         st.warning("Upload a CSV to begin.")
@@ -562,7 +625,7 @@ if prompt:
 
                     insight = get_ai_insight(prompt, sql, result_df)
                     if insight:
-                        st.markdown(f'<div class="note-card"><h4>💡 Insight</h4><p>{insight}</p></div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="note-card"><h4>Insight</h4><p>{insight}</p></div>', unsafe_allow_html=True)
 
                     with st.expander("Raw Data"):
                         st.dataframe(result_df)
@@ -593,4 +656,3 @@ if prompt:
                 status.update(label="Error", state="error")
                 st.error(error_msg)
                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
-
