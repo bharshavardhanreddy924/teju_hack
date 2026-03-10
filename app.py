@@ -9,7 +9,7 @@ import plotly.express as px
 import json
 import io
 
-st.set_page_config(page_title="InsightForge AI", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="QueryMind AI", page_icon="⚡", layout="wide")
 
 # ---------------------------------------------------------------------------
 # Backend secrets — keys are stored in .streamlit/secrets.toml (local) or
@@ -165,7 +165,7 @@ if "smart_questions" not in st.session_state:
     st.session_state.smart_questions = []
 
 with st.sidebar:
-    st.title("InsightForge")
+    st.title("QueryMind")
 
     st.divider()
 
@@ -413,7 +413,7 @@ Write a concise 3-4 sentence executive summary. Be specific with numbers. No mar
         return None
 
 
-st.title("InsightForge AI")
+st.title("QueryMind AI")
 st.caption("Ask questions in plain English — get instant charts, SQL, and AI-powered insights.")
 
 if st.session_state.current_df is not None and st.session_state.data_profile:
@@ -593,3 +593,4 @@ if prompt:
                 status.update(label="Error", state="error")
                 st.error(error_msg)
                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
+
