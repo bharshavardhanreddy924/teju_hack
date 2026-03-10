@@ -9,7 +9,7 @@ import plotly.express as px
 import json
 import io
 
-st.set_page_config(page_title="InsightForge AI", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="QueryMind AI", page_icon="⚡", layout="wide")
 
 EMERALD = "#10b981"
 EMERALD_LIGHT = "#34d399"
@@ -152,7 +152,7 @@ if "api_keys" not in st.session_state:
     st.session_state.api_keys = [""]
 
 with st.sidebar:
-    st.title("InsightForge")
+    st.title("QueryMind")
 
     st.subheader("API Keys")
     for i in range(len(st.session_state.api_keys)):
@@ -420,7 +420,7 @@ Write a concise 3-4 sentence executive summary. Be specific with numbers. No mar
         return None
 
 
-st.title("InsightForge AI")
+st.title("QueryMind AI")
 st.caption("Ask questions in plain English — get instant charts, SQL, and AI-powered insights.")
 
 if st.session_state.current_df is not None and st.session_state.data_profile:
@@ -599,4 +599,5 @@ if prompt:
                     error_msg = "Rate limit exceeded. Wait ~60s and retry."
                 status.update(label="Error", state="error")
                 st.error(error_msg)
+
                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
