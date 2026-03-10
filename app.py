@@ -9,7 +9,22 @@ import plotly.express as px
 import json
 import io
 
-st.set_page_config(page_title="QueryMind AI", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="InsightForge AI", page_icon="⚡", layout="wide")
+
+# ---------------------------------------------------------------------------
+# Backend secrets — keys are stored in .streamlit/secrets.toml (local) or
+# the Streamlit Cloud "Secrets" dashboard (production). Never exposed to users.
+# ---------------------------------------------------------------------------
+def _load_gemini_keys() -> list[str]:
+    try:
+        raw = st.secrets["gemini"]["api_keys"]
+        keys = list(raw) if not isinstance(raw, str) else [raw]
+        return [k.strip() for k in keys if k.strip()]
+    except Exception:
+        return []
+
+GEMINI_API_KEYS: list[str] = _load_gemini_keys()
+MODEL_CHOICE: str = "gemini-2.5-flash"
 
 EMERALD = "#10b981"
 EMERALD_LIGHT = "#34d399"
@@ -148,31 +163,10 @@ if "ai_summary" not in st.session_state:
     st.session_state.ai_summary = None
 if "smart_questions" not in st.session_state:
     st.session_state.smart_questions = []
-if "api_keys" not in st.session_state:
-    st.session_state.api_keys = [""]
 
 with st.sidebar:
-    st.title("QueryMind")
+    st.title("InsightForge")
 
-    st.subheader("API Keys")
-    for i in range(len(st.session_state.api_keys)):
-        cols = st.columns([5, 1])
-        st.session_state.api_keys[i] = cols[0].text_input(
-            f"Key {i + 1}",
-            value=st.session_state.api_keys[i],
-            type="password",
-            label_visibility="collapsed",
-            key=f"apikey_input_{i}",
-        )
-        if cols[1].button("✕", key=f"rm_key_{i}", help="Remove") and len(st.session_state.api_keys) > 1:
-            st.session_state.api_keys.pop(i)
-            st.rerun()
-
-    if st.button("＋ Add Key", use_container_width=True):
-        st.session_state.api_keys.append("")
-        st.rerun()
-
-    model_choice = "gemini-2.5-flash"
     st.divider()
 
     st.subheader("Upload Data here")
@@ -264,14 +258,13 @@ with st.sidebar:
 
 
 def call_gemini(prompt_text: str) -> str:
-    keys = [k.strip() for k in st.session_state.api_keys if k.strip()]
-    if not keys:
-        raise Exception("No API key configured. Add at least one Gemini API key in the sidebar.")
+    if not GEMINI_API_KEYS:
+        raise Exception("No Gemini API keys configured. Add keys to .streamlit/secrets.toml or the Streamlit Cloud Secrets dashboard.")
     last_err = None
-    for key in keys:
+    for key in GEMINI_API_KEYS:
         try:
             client = genai.Client(api_key=key)
-            return client.models.generate_content(model=model_choice, contents=prompt_text).text.strip()
+            return client.models.generate_content(model=MODEL_CHOICE, contents=prompt_text).text.strip()
         except Exception as e:
             error_str = str(e)
             if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "quota" in error_str.lower():
@@ -420,7 +413,7 @@ Write a concise 3-4 sentence executive summary. Be specific with numbers. No mar
         return None
 
 
-st.title("QueryMind AI")
+st.title("InsightForge AI")
 st.caption("Ask questions in plain English — get instant charts, SQL, and AI-powered insights.")
 
 if st.session_state.current_df is not None and st.session_state.data_profile:
@@ -436,7 +429,7 @@ if st.session_state.current_df is not None and st.session_state.data_profile:
             <div class="q-bar"><div class="q-fill" style="width:{qs}%;background:{qc};"></div></div></div>
     </div>""", unsafe_allow_html=True)
 
-    if any(k.strip() for k in st.session_state.api_keys):
+    if GEMINI_API_KEYS:
         if st.session_state.ai_summary is None:
             with st.spinner("Generating summary..."):
                 st.session_state.ai_summary = generate_ai_summary(st.session_state.schema_info, st.session_state.current_df)
@@ -493,8 +486,8 @@ else:
     prompt = chat_prompt
 
 if prompt:
-    if not any(k.strip() for k in st.session_state.api_keys):
-        st.error("Add at least one Gemini API Key in the sidebar.")
+    if not GEMINI_API_KEYS:
+        st.error("No Gemini API keys configured. Contact the app administrator.")
         st.stop()
     if not st.session_state.schema_info:
         st.warning("Upload a CSV to begin.")
@@ -599,5 +592,4 @@ if prompt:
                     error_msg = "Rate limit exceeded. Wait ~60s and retry."
                 status.update(label="Error", state="error")
                 st.error(error_msg)
-
                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
